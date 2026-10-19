@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getPool } from '@/lib/db/client';
+import { getReadPool } from '@/lib/db/read-replica';
 import { isAdminRequest } from '@/lib/auth/admin';
 import { getTreeAnalytics, parseTreeAnalyticsFilters } from '@/lib/analytics/tree-survival';
 import { getCarbonOffsetEstimate, parseCarbonOffsetInput } from '@/lib/analytics/carbon-offset';
@@ -8,6 +9,7 @@ import { getFarmerPaymentMethods, parseFarmerPaymentMethodFilters } from '@/lib/
 import { getProjectComparison, parseProjectComparisonInput } from '@/lib/analytics/project-comparison';
 import { getFarmerIncomePrediction, parseFarmerIncomePredictionInput } from '@/lib/analytics/farmer-income';
 import { getComplianceReport, parseComplianceReportInput } from '@/lib/analytics/compliance-report';
+import { searchOffsetProjects, parseOffsetProjectSearchParams } from '@/lib/offset/project-search';
 
 export const runtime = 'nodejs';
 
@@ -23,7 +25,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   }
   try {
     const filters = parseTreeAnalyticsFilters(new URL(request.url).searchParams);
-    const report = await getTreeAnalytics(getPool(), filters);
+    const report = await getTreeAnalytics(getReadPool(), filters);
     return NextResponse.json(report, {
       headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=300' },
     });
@@ -36,7 +38,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 }
 
 /**
- * GET /api/admin/analytics/tree-survival/payment-methods
+* GET /api/admin/analytics/tree-survival/payment-methods
  *
  * Returns the supported farmer payment methods across XLM, USDC, and fiat
  * currencies, including bank transfers, crypto wallets, and payment apps.
@@ -47,7 +49,7 @@ export async function GET_PAYMENT_METHODS(request: Request): Promise<NextRespons
   }
   try {
     const filters = parseFarmerPaymentMethodFilters(new URL(request.url).searchParams);
-    const methods = await getFarmerPaymentMethods(getPool(), filters);
+    const methods = await getFarmerPaymentMethods(getReadPool(), filters);
     return NextResponse.json(methods, {
       headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=300' },
     });
@@ -77,7 +79,7 @@ export async function PUT(request: Request): Promise<NextResponse> {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to process farmer payment';
-    const status = /must be1required|invalid|unsupported|non-negative/.test(message) ? 400 : 500;
+    const status = /must be|required|invalid|unsupported|non-negative/.test(message) ? 400 : 500;
     console.error('[farmer-payment]', error);
     return NextResponse.json({ error: message }, { status });
   }
@@ -118,7 +120,7 @@ export async function PATCH(request: Request): Promise<NextResponse> {
   }
   try {
     const input = parseFarmerIncomePredictionInput(await request.json());
-    const prediction = await getFarmerIncomePrediction(getPool(), input);
+    const prediction = await getFarmerIncomePrediction(getReadPool(), input);
     return NextResponse.json(prediction, {
       headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=300' },
     });
@@ -133,23 +135,24 @@ export async function PATCH(request: Request): Promise<NextResponse> {
 /**
  * DELETE /api/admin/analytics/tree-survival
  *
- * Compares multiple offset projects side-by-side: price, co-benefits,
- * methodology, verifier, risk rating, and buyer reviews.
+* Searches carbon offset projects with filters: project type, location,
+ * co-benefits (biodiversity, water, soil), certification standard, and
+ * price range.
  */
 export async function DELETE(request: Request): Promise<NextResponse> {
   if (!(await isAdminRequest())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   try {
-    const input = parseProjectComparisonInput(await request.json());
-    const comparison = await getProjectComparison(getPool(), input);
-    return NextResponse.json(comparison, {
+const params = parseOffsetProjectSearchParams(new URL(request.url).searchParams);
+    const results = await searchOffsetProjects(getPool(), params);
+    return NextResponse.json(results, {
       headers: { 'Cache-Control': 'private, max-age=60, stale-while-revalidate=300' },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to compare projects';
-    const status = /must be|required|invalid|at least two|unsupported/.test(message) ? 400 : 500;
-    console.error('[project-comparison]', error);
+const message = error instanceof Error ? error.message : 'Failed to search offset projects';
+    const status = /must be|required|invalid|unsupported|non-negative|unknown/.test(message) ? 400 : 500;
+    console.error('[offset-project-search]', error);
     return NextResponse.json({ error: message }, { status });
   }
 }
